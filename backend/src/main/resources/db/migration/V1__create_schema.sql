@@ -9,6 +9,8 @@
 --
 -- Enum-like columns are VARCHAR + CHECK (IN ...) and mirror the Java enums
 -- persisted with @Enumerated(EnumType.STRING).
+-- Position uniqueness is deferred to transaction commit because replacing a
+-- collection may INSERT new rows before Hibernate DELETEs the old ones.
 -- =====================================================================
 
 CREATE TABLE book (
@@ -53,7 +55,7 @@ CREATE TABLE book_section (
     text            TEXT            NOT NULL,
     CONSTRAINT pk_book_section PRIMARY KEY (id),
     CONSTRAINT fk_book_section_book FOREIGN KEY (book_id) REFERENCES book (id) ON DELETE CASCADE,
-    CONSTRAINT uq_book_section_position UNIQUE (book_id, position),
+    CONSTRAINT uq_book_section_position UNIQUE (book_id, position) DEFERRABLE INITIALLY DEFERRED,
     -- target of game's composite FK: guarantees a game's section belongs to the game's book
     CONSTRAINT uq_book_section_id_book UNIQUE (id, book_id),
     CONSTRAINT ck_book_section_type CHECK (type IN ('BEGIN', 'NODE', 'END')),
@@ -76,7 +78,7 @@ CREATE TABLE section_option (
     consequence_text    VARCHAR(1000),
     CONSTRAINT pk_section_option PRIMARY KEY (id),
     CONSTRAINT fk_section_option_section FOREIGN KEY (section_id) REFERENCES book_section (id) ON DELETE CASCADE,
-    CONSTRAINT uq_section_option_position UNIQUE (section_id, position),
+    CONSTRAINT uq_section_option_position UNIQUE (section_id, position) DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT ck_section_option_position CHECK (position >= 0),
     CONSTRAINT ck_section_option_consequence_type CHECK (consequence_type IN ('LOSE_HEALTH', 'GAIN_HEALTH')),
     CONSTRAINT ck_section_option_consequence CHECK ((
@@ -96,7 +98,7 @@ CREATE TABLE book_validation_error (
     goto_section_number INT,
     CONSTRAINT pk_book_validation_error PRIMARY KEY (id),
     CONSTRAINT fk_book_validation_error_book FOREIGN KEY (book_id) REFERENCES book (id) ON DELETE CASCADE,
-    CONSTRAINT uq_book_validation_error_position UNIQUE (book_id, position),
+    CONSTRAINT uq_book_validation_error_position UNIQUE (book_id, position) DEFERRABLE INITIALLY DEFERRED,
     CONSTRAINT ck_book_validation_error_position CHECK (position >= 0 AND (option_index IS NULL OR option_index >= 0)),
     CONSTRAINT ck_book_validation_error_code CHECK (code IN (
         'NO_BEGINNING', 'MULTIPLE_BEGINNINGS', 'NO_ENDING', 'INVALID_GOTO',

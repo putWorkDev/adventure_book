@@ -3,6 +3,7 @@ package com.game.adventure_book.domain.entity;
 import com.game.adventure_book.domain.model.BookSource;
 import com.game.adventure_book.domain.model.Difficulty;
 import com.game.adventure_book.domain.model.SectionType;
+import com.game.adventure_book.domain.model.ValidationErrorCode;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -90,7 +91,7 @@ public class Book {
         this.source = Objects.requireNonNull(source, "source");
     }
 
-    /** Replaces all sections, keeping file order and refreshing the denormalised counters. */
+    /** Replaces all sections, keeping file order and refreshing counters and story validation. */
     public void replaceSections(Collection<Section> newSections) {
         sections.clear();
         int position = 0;
@@ -100,18 +101,43 @@ public class Book {
         }
         sectionCount = sections.size();
         endingCount = (int) sections.stream().filter(s -> s.getType() == SectionType.END).count();
+        refreshStoryValidation();
     }
 
-    /** Replaces the validation report; an empty list marks the book as valid. */
+    void refreshStoryValidation() {
+        replaceValidationErrors(validationErrors.stream()
+                .filter(error -> !isStoryError(error.getCode()))
+                .toList());
+    }
+
+    /** Combines import diagnostics with the story rules; an invalid book remains storable. */
     public void replaceValidationErrors(Collection<BookValidationError> errors) {
+        List<BookValidationError> report = new ArrayList<>(errors);
+        for (BookValidationError storyError : BookValidator.validate(sections)) {
+            if (report.stream().noneMatch(error -> error.getCode() == storyError.getCode()
+                    && Objects.equals(error.getSectionNumber(), storyError.getSectionNumber())
+                    && Objects.equals(error.getOptionIndex(), storyError.getOptionIndex())
+                    && Objects.equals(error.getGotoSectionNumber(), storyError.getGotoSectionNumber()))) {
+                report.add(storyError);
+            }
+        }
         validationErrors.clear();
         int position = 0;
-        for (BookValidationError error : errors) {
+        for (BookValidationError error : report) {
             error.attachTo(this, position++);
             validationErrors.add(error);
         }
         errorCount = validationErrors.size();
         valid = errorCount == 0;
+    }
+
+    private static boolean isStoryError(ValidationErrorCode code) {
+        return code == ValidationErrorCode.NO_BEGINNING
+                || code == ValidationErrorCode.MULTIPLE_BEGINNINGS
+                || code == ValidationErrorCode.NO_ENDING
+                || code == ValidationErrorCode.INVALID_GOTO
+                || code == ValidationErrorCode.NODE_WITHOUT_OPTIONS
+                || code == ValidationErrorCode.DUPLICATE_SECTION_ID;
     }
 
     /** The unique BEGIN section, if the book is valid. */

@@ -19,6 +19,13 @@ optionless section. These migrations are intended for a fresh database:
 editing them changes Flyway checksums on any database that has already
 applied the previous versions.
 
+Book and section changes in the domain recalculate the four story-rule
+diagnostics (beginning, ending, valid targets, and non-ending choices);
+import/parsing diagnostics can be supplied separately. V1 defers uniqueness
+checks on ordered sections, choices, and validation errors until transaction
+commit so Hibernate can replace a saved book's rows without transient
+position collisions. Only books without validation errors can be played.
+
 # Getting Started
 
 ### Reference Documentation

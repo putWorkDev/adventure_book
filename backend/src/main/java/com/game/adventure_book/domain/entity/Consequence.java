@@ -34,8 +34,8 @@ public class Consequence {
 
     /** Health after applying this consequence, clamped to {@code [0, maxHealth]}. */
     public int applyTo(int health, int maxHealth) {
-        int result = type == ConsequenceType.LOSE_HEALTH ? health - value : health + value;
-        return Math.clamp(result, 0, maxHealth);
+        long result = type == ConsequenceType.LOSE_HEALTH ? (long) health - value : (long) health + value;
+        return (int) Math.clamp(result, 0, maxHealth);
     }
 
     public ConsequenceType getType() {

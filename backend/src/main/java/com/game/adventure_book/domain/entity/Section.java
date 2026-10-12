@@ -77,6 +77,9 @@ public class Section {
             option.attachTo(this, position++);
             options.add(option);
         }
+        if (book != null) {
+            book.refreshStoryValidation();
+        }
     }
 
     public Optional<SectionOption> findOption(int optionIndex) {
