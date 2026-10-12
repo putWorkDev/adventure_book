@@ -14,12 +14,16 @@ info:
     - An option's `gotoId` points to a section that doesn't exist (`INVALID_GOTO`).
     - A non-`END` section has no options (`NODE_WITHOUT_OPTIONS`).
     - A consequence has an unknown `type` or a `value` that is not a positive
-      integer (`INVALID_CONSEQUENCE`).
+      integer (`INVALID_CONSEQUENCE`). Such source values cannot be stored
+      in the normalized consequence columns; uploads must retain their raw
+      JSON in `source_json` if they need to be displayed or revalidated.
 
     The server can also report `DUPLICATE_SECTION_ID` and `UNPARSEABLE`
     (for example, an empty or malformed file).
 
     Invalid books can still be listed and viewed, but they **cannot be played**.
+    All four bundled examples currently have validation errors; import a valid
+    book before starting a game.
 
     **Gameplay**
     - A player starts with `10` health points (`maxHealth`).
@@ -34,9 +38,13 @@ info:
     - Progress is saved on every move. `POST /games/{gameId}/save` creates an
       explicit save point (`savedAt`) that the UI can show.
 
-    **Data normalisation** - the source JSON files mix strings and numbers for
-    section `id` and consequence `value`. The API always returns them as
-    integers.
+    **Data normalisation** - numeric strings in section `id`, option `gotoId`
+    and consequence `value` are converted to integers for storage and responses.
+    For example, the `"500"` section in The Prisoner matches `gotoId: 500`;
+    that book is invalid because section 666 has no options, not because of its
+    numeric-string ids. The bundled catalog is installed by Flyway migrations;
+    the example JSON files are not loaded at application startup. Listing books
+    through MCP (extra objective 7) requires a separate MCP integration.
 servers:
   - url: http://localhost:8080/api/v1
     description: Local development
@@ -57,7 +65,7 @@ paths:
       parameters:
         - name: search
           in: query
-          description: Case-insensitive full-text match on title and author.
+          description: Case-insensitive substring match on title and author.
           schema: { type: string, example: crystal }
         - name: difficulty
           in: query
@@ -102,9 +110,12 @@ paths:
       operationId: importBook
       summary: Import a new book
       description: |
-        Accepts a book in the same JSON format as the files in `/books`.
-        The book is always stored, even if it's invalid. The validation result
-        is returned so the client can show what's wrong.
+        Accepts a book in the same JSON format as the bundled examples.
+        A well-formed request with story-rule violations is stored and its
+        validation report is returned. Malformed JSON or missing required
+        book metadata is rejected with 400 instead. If invalid consequence
+        values cannot be normalized, store the original uploaded JSON in
+        `source_json` and report INVALID_CONSEQUENCE.
       requestBody:
         required: true
         content:
@@ -115,7 +126,7 @@ paths:
           description: Book imported
           headers:
             Location:
-              schema: { type: string, example: /api/v1/books/crystal-caverns }
+              schema: { type: string, example: /api/v1/books/my-adventure }
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BookDetail' }
@@ -439,13 +450,16 @@ components:
     # ---------- Books ----------
     BookSummary:
       type: object
-      required: [id, title, author, difficulty, sectionCount, valid]
+      required: [id, title, author, difficulty, sectionCount, endingCount, valid, errorCount]
       properties:
         id: { type: string, example: crystal-caverns }
         title: { type: string, example: The Crystal Caverns }
-        author: { type: string, example: Evelyn Stormrider }
-        difficulty: { $ref: '#/components/schemas/Difficulty' }
-        sectionCount: { type: integer, example: 14 }
+        author: { type: string, nullable: true, example: Evelyn Stormrider }
+        difficulty:
+          allOf:
+            - $ref: '#/components/schemas/Difficulty'
+          nullable: true
+        sectionCount: { type: integer, example: 13 }
         endingCount: { type: integer, example: 2 }
         valid: { type: boolean, example: false }
         errorCount: { type: integer, example: 1 }
@@ -492,9 +506,12 @@ components:
     BookImport:
       type: object
       description: |
-        Same format as the source JSON files. Section `id`, `gotoId` and
-        consequence `value` are integers, but numeric strings (e.g. `"500"`)
-        are also accepted and converted. Unknown fields are ignored.
+        Same format as the bundled JSON examples. Section `id`, option
+        `gotoId` and consequence `value` accept integers or numeric strings
+        (e.g. `"500"`); both are stored as integers. Unknown fields are ignored.
+        Invalid consequence values are reported as INVALID_CONSEQUENCE rather
+        than written into normalized consequence columns. Empty or malformed
+        JSON cannot be submitted to this endpoint.
       required: [title, author, difficulty, sections]
       properties:
         id:
@@ -512,12 +529,43 @@ components:
       description: Like `Section`, but `options` can be left out (e.g. on END sections).
       required: [id, text, type]
       properties:
-        id: { type: integer }
+        id: { $ref: '#/components/schemas/ImportInteger' }
         text: { type: string }
         type: { $ref: '#/components/schemas/SectionType' }
         options:
           type: array
-          items: { $ref: '#/components/schemas/Option' }
+          items: { $ref: '#/components/schemas/ImportOption' }
+
+    ImportInteger:
+      description: An integer or a numeric string normalized to an integer.
+      oneOf:
+        - type: integer
+          format: int32
+        - type: string
+          pattern: '^-?[0-9]+$'
+
+    ImportOption:
+      type: object
+      required: [description, gotoId]
+      properties:
+        description: { type: string }
+        gotoId: { $ref: '#/components/schemas/ImportInteger' }
+        consequence: { $ref: '#/components/schemas/ImportConsequence' }
+
+    ImportConsequence:
+      type: object
+      required: [type, value]
+      properties:
+        type:
+          type: string
+          description: Unknown values produce INVALID_CONSEQUENCE in the validation report.
+        value:
+          oneOf:
+            - type: integer
+              format: int32
+            - type: string
+          description: Non-positive or non-numeric values produce INVALID_CONSEQUENCE.
+        text: { type: string }
 
     ValidationReport:
       type: object
@@ -530,14 +578,14 @@ components:
       example:
         valid: false
         errors:
-          - code: NODE_WITHOUT_OPTIONS
-            sectionId: 666
-            message: Section 666 is not an END section but has no options.
           - code: INVALID_GOTO
             sectionId: 1
             optionIndex: 1
             gotoId: 999
             message: Option 1 of section 1 points to section 999, which doesn't exist.
+          - code: NODE_WITHOUT_OPTIONS
+            sectionId: 666
+            message: Section 666 is not an END section but has no options.
 
     ValidationError:
       type: object
@@ -564,7 +612,7 @@ components:
       type: object
       required: [bookId]
       properties:
-        bookId: { type: string, example: crystal-caverns }
+        bookId: { type: string, example: my-adventure }
 
     ChoiceRequest:
       type: object

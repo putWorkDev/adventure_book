@@ -544,10 +544,8 @@ JOIN book_section bs ON bs.book_id = b.id AND bs.position = s.ordinality - 1
 CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.item->'options', '[]'::jsonb))
     WITH ORDINALITY AS o(item, ordinality);
 
--- The validation report describes the source documents, including type
--- mismatches in the-prisoner.json (numeric gotoId vs. string section id).
--- Numeric strings are normalized above for storage; the original mismatch
--- remains a validation error, so that book cannot be played.
+-- Numeric-string section ids in the-prisoner.json match numeric gotoIds after
+-- normalization. Its optionless NODE is the only validation error.
 INSERT INTO book_validation_error
     (book_id, position, code, message, section_number, option_index, goto_section_number)
 VALUES
@@ -555,9 +553,7 @@ VALUES
     ('dragon-quest', 0, 'UNPARSEABLE', 'The file is empty.', NULL, NULL, NULL),
     ('pirates-jade-sea', 0, 'INVALID_GOTO', 'Option 1 of section 1 points to section 999, which does not exist.', 1, 1, 999),
     ('pirates-jade-sea', 1, 'NODE_WITHOUT_OPTIONS', 'Section 666 is not an END section but has no options.', 666, NULL, NULL),
-    ('the-prisoner', 0, 'INVALID_GOTO', 'Option 0 of section 1 has numeric gotoId 500, but the target section id is a string.', 1, 0, 500),
-    ('the-prisoner', 1, 'INVALID_GOTO', 'Option 0 of section 30 has numeric gotoId 1000, but the target section id is a string.', 30, 0, 1000),
-    ('the-prisoner', 2, 'NODE_WITHOUT_OPTIONS', 'Section 666 is not an END section but has no options.', 666, NULL, NULL);
+    ('the-prisoner', 0, 'NODE_WITHOUT_OPTIONS', 'Section 666 is not an END section but has no options.', 666, NULL, NULL);
 
 UPDATE book b
 SET error_count = (SELECT count(*) FROM book_validation_error e WHERE e.book_id = b.id),

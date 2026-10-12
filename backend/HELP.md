@@ -13,6 +13,11 @@ migration to change the bundled catalog. The `source_json` column introduced
 by V1 is not populated for these books: their stored representation is the
 normalized tables. The empty Dragon Quest file is stored as a book with an
 `UNPARSEABLE` validation error and no sections.
+V1 enforces complete optional consequences. V2 normalizes numeric-string
+section ids before checking goto targets; The Prisoner's only error is its
+optionless section. These migrations are intended for a fresh database:
+editing them changes Flyway checksums on any database that has already
+applied the previous versions.
 
 # Getting Started
 

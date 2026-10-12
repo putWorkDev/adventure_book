@@ -79,10 +79,10 @@ CREATE TABLE section_option (
     CONSTRAINT uq_section_option_position UNIQUE (section_id, position),
     CONSTRAINT ck_section_option_position CHECK (position >= 0),
     CONSTRAINT ck_section_option_consequence_type CHECK (consequence_type IN ('LOSE_HEALTH', 'GAIN_HEALTH')),
-    CONSTRAINT ck_section_option_consequence CHECK (
+    CONSTRAINT ck_section_option_consequence CHECK ((
         (consequence_type IS NULL AND consequence_value IS NULL AND consequence_text IS NULL)
         OR (consequence_type IS NOT NULL AND consequence_value IS NOT NULL AND consequence_value > 0)
-    )
+    ) IS TRUE)
 );
 
 CREATE TABLE book_validation_error (
@@ -137,12 +137,12 @@ CREATE TABLE game (
     ),
     CONSTRAINT ck_game_last_consequence_type CHECK (last_consequence_type IN ('LOSE_HEALTH', 'GAIN_HEALTH')),
     -- last consequence is either absent or fully described (text is optional)
-    CONSTRAINT ck_game_last_consequence CHECK (
+    CONSTRAINT ck_game_last_consequence CHECK ((
         (last_consequence_type IS NULL AND last_consequence_value IS NULL AND last_consequence_text IS NULL
             AND last_consequence_health_before IS NULL AND last_consequence_health_after IS NULL)
         OR (last_consequence_type IS NOT NULL AND last_consequence_value > 0
             AND last_consequence_health_before IS NOT NULL AND last_consequence_health_after = health)
-    )
+    ) IS TRUE)
 );
 
 CREATE INDEX ix_game_book ON game (book_id);
@@ -174,10 +174,10 @@ CREATE TABLE game_step (
     CONSTRAINT ck_game_step_option_index CHECK (option_index >= 0),
     CONSTRAINT ck_game_step_health CHECK (health_after >= 0),
     CONSTRAINT ck_game_step_consequence_type CHECK (consequence_type IN ('LOSE_HEALTH', 'GAIN_HEALTH')),
-    CONSTRAINT ck_game_step_consequence CHECK (
+    CONSTRAINT ck_game_step_consequence CHECK ((
         (consequence_type IS NULL AND consequence_value IS NULL AND consequence_text IS NULL
             AND consequence_health_before IS NULL AND consequence_health_after IS NULL)
         OR (consequence_type IS NOT NULL AND consequence_value > 0
             AND consequence_health_before IS NOT NULL AND consequence_health_after = health_after)
-    )
+    ) IS TRUE)
 );
