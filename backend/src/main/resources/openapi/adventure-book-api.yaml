@@ -1,0 +1,706 @@
+openapi: 3.0.3
+info:
+  title: Adventure Book API
+  version: 1.0.0
+  description: |
+    Backend API for the Adventure Book application: browse, search and filter
+    adventure books, validate them, and play them as games.
+
+    ## Domain rules
+
+    **Book validity** - a book is **invalid** if any of these are true:
+    - It has no `BEGIN` section, or more than one (`NO_BEGINNING`, `MULTIPLE_BEGINNINGS`).
+    - It has no `END` section (`NO_ENDING`). Having several endings is fine.
+    - An option's `gotoId` points to a section that doesn't exist (`INVALID_GOTO`).
+    - A non-`END` section has no options (`NODE_WITHOUT_OPTIONS`).
+    - A consequence has an unknown `type` or a `value` that is not a positive
+      integer (`INVALID_CONSEQUENCE`).
+
+    The server can also report `DUPLICATE_SECTION_ID` and `UNPARSEABLE`
+    (for example, an empty or malformed file).
+
+    Invalid books can still be listed and viewed, but they **cannot be played**.
+
+    **Gameplay**
+    - A player starts with `10` health points (`maxHealth`).
+    - When the player picks an option, its consequence (if there is one) is
+      applied first, then the player moves to the `gotoId` section.
+    - `LOSE_HEALTH` lowers health. Health never goes below 0.
+    - `GAIN_HEALTH` raises health, but never above `maxHealth`.
+    - If health reaches `0`, the game ends with status `DIED`. This takes
+      priority over reaching an `END` section on the same move.
+    - Reaching an `END` section with health above 0 ends the game with status
+      `COMPLETED`.
+    - Progress is saved on every move. `POST /games/{gameId}/save` creates an
+      explicit save point (`savedAt`) that the UI can show.
+
+    **Data normalisation** - the source JSON files mix strings and numbers for
+    section `id` and consequence `value`. The API always returns them as
+    integers.
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local development
+# No authentication for now (single-player app).
+security: []
+tags:
+  - name: Books
+    description: Browse, search, filter and validate adventure books
+  - name: Games
+    description: Play a book - start, move, pause, resume, save, stop
+
+paths:
+  /books:
+    get:
+      tags: [Books]
+      operationId: listBooks
+      summary: List, search and filter books
+      parameters:
+        - name: search
+          in: query
+          description: Case-insensitive full-text match on title and author.
+          schema: { type: string, example: crystal }
+        - name: difficulty
+          in: query
+          description: Filter by one or more difficulties.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/Difficulty' }
+        - name: author
+          in: query
+          description: Case-insensitive exact match on author.
+          schema: { type: string }
+        - name: valid
+          in: query
+          description: Only return books with this validity status.
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: sort
+          in: query
+          description: Sort field and direction.
+          schema:
+            type: string
+            enum:
+              - 'title,asc'
+              - 'title,desc'
+              - 'author,asc'
+              - 'author,desc'
+              - 'difficulty,asc'
+              - 'difficulty,desc'
+            default: 'title,asc'
+      responses:
+        '200':
+          description: A page of books
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookSummaryPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [Books]
+      operationId: importBook
+      summary: Import a new book
+      description: |
+        Accepts a book in the same JSON format as the files in `/books`.
+        The book is always stored, even if it's invalid. The validation result
+        is returned so the client can show what's wrong.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BookImport' }
+      responses:
+        '201':
+          description: Book imported
+          headers:
+            Location:
+              schema: { type: string, example: /api/v1/books/crystal-caverns }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /books/{bookId}:
+    parameters:
+      - $ref: '#/components/parameters/BookId'
+    get:
+      tags: [Books]
+      operationId: getBook
+      summary: Get book details
+      description: |
+        Returns book metadata and the validation report. Sections are left out
+        by default to avoid spoilers. Set `includeSections=true` to include them
+        (useful for an editor or debug view).
+      parameters:
+        - name: includeSections
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Book details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Books]
+      operationId: deleteBook
+      summary: Delete a book and all of its games
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /books/{bookId}/validation:
+    parameters:
+      - $ref: '#/components/parameters/BookId'
+    get:
+      tags: [Books]
+      operationId: validateBook
+      summary: Get the validation report for a book
+      responses:
+        '200':
+          description: Validation report
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationReport' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /games:
+    get:
+      tags: [Games]
+      operationId: listGames
+      summary: List games (e.g. to resume a saved game)
+      parameters:
+        - name: bookId
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/GameStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: A page of games, most recently updated first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameSummaryPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [Games]
+      operationId: startGame
+      summary: Start a new game for a book
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartGameRequest' }
+      responses:
+        '201':
+          description: Game started on the book's BEGIN section with full health
+          headers:
+            Location:
+              schema: { type: string, example: /api/v1/games/3f9c2b1e-8a4d-4f7e-9b2a-1c5d6e7f8a90 }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: The book is invalid and cannot be played
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/InvalidBookProblem' }
+
+  /games/{gameId}:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      tags: [Games]
+      operationId: getGame
+      summary: Get the current game state (header and section content)
+      responses:
+        '200':
+          description: Current game state
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameState' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Games]
+      operationId: deleteGame
+      summary: Delete a game
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /games/{gameId}/choices:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [Games]
+      operationId: makeChoice
+      summary: Pick an option in the current section
+      description: |
+        Applies the chosen option's consequence, moves to the next section and
+        returns the new state. Only allowed while the game is `IN_PROGRESS`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChoiceRequest' }
+      responses:
+        '200':
+          description: New game state after the choice
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Game is not `IN_PROGRESS` (paused, finished or stopped)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: "`optionId` doesn't exist in the current section"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /games/{gameId}/pause:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [Games]
+      operationId: pauseGame
+      summary: Pause the game (IN_PROGRESS -> PAUSED)
+      responses:
+        '200':
+          description: Game paused
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameState' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidTransition' }
+
+  /games/{gameId}/resume:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [Games]
+      operationId: resumeGame
+      summary: Resume a paused game (PAUSED -> IN_PROGRESS)
+      responses:
+        '200':
+          description: Game resumed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameState' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidTransition' }
+
+  /games/{gameId}/stop:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [Games]
+      operationId: stopGame
+      summary: Stop the game for good (IN_PROGRESS | PAUSED -> ABANDONED)
+      responses:
+        '200':
+          description: Game stopped
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameState' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidTransition' }
+
+  /games/{gameId}/save:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    post:
+      tags: [Games]
+      operationId: saveGame
+      summary: Save progress explicitly
+      description: Sets `savedAt` to now. Allowed when the game is `IN_PROGRESS` or `PAUSED`.
+      responses:
+        '200':
+          description: Progress saved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameState' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/InvalidTransition' }
+
+  /games/{gameId}/history:
+    parameters:
+      - $ref: '#/components/parameters/GameId'
+    get:
+      tags: [Games]
+      operationId: getGameHistory
+      summary: Get every choice made so far in this game, in order
+      responses:
+        '200':
+          description: Choice history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/HistoryEntry' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  parameters:
+    BookId:
+      name: bookId
+      in: path
+      required: true
+      description: Book slug, taken from the file name or title (e.g. `crystal-caverns`).
+      schema: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$', example: crystal-caverns }
+    GameId:
+      name: gameId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      description: Page number, starting at 0.
+      schema: { type: integer, minimum: 0, default: 0 }
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+
+  responses:
+    BadRequest:
+      description: Malformed request or invalid parameters
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Resource already exists
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    InvalidTransition:
+      description: The game's current status doesn't allow this action
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Difficulty:
+      type: string
+      enum: [EASY, MEDIUM, HARD]
+
+    SectionType:
+      type: string
+      enum: [BEGIN, NODE, END]
+
+    ConsequenceType:
+      type: string
+      enum: [LOSE_HEALTH, GAIN_HEALTH]
+
+    GameStatus:
+      type: string
+      description: |
+        - `IN_PROGRESS` - the player can make choices
+        - `PAUSED` - the game is on hold; it must be resumed before making a choice
+        - `COMPLETED` - the player reached an END section alive (success)
+        - `DIED` - health reached 0 (failure)
+        - `ABANDONED` - the player stopped the game
+      enum: [IN_PROGRESS, PAUSED, COMPLETED, DIED, ABANDONED]
+
+    ValidationErrorCode:
+      type: string
+      enum:
+        - NO_BEGINNING
+        - MULTIPLE_BEGINNINGS
+        - NO_ENDING
+        - INVALID_GOTO
+        - NODE_WITHOUT_OPTIONS
+        - DUPLICATE_SECTION_ID
+        - INVALID_CONSEQUENCE
+        - UNPARSEABLE
+
+    # ---------- Books ----------
+    BookSummary:
+      type: object
+      required: [id, title, author, difficulty, sectionCount, valid]
+      properties:
+        id: { type: string, example: crystal-caverns }
+        title: { type: string, example: The Crystal Caverns }
+        author: { type: string, example: Evelyn Stormrider }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        sectionCount: { type: integer, example: 14 }
+        endingCount: { type: integer, example: 2 }
+        valid: { type: boolean, example: false }
+        errorCount: { type: integer, example: 1 }
+
+    BookDetail:
+      allOf:
+        - $ref: '#/components/schemas/BookSummary'
+        - type: object
+          required: [validation]
+          properties:
+            validation: { $ref: '#/components/schemas/ValidationReport' }
+            sections:
+              type: array
+              description: Only included when `includeSections=true`.
+              items: { $ref: '#/components/schemas/Section' }
+
+    Section:
+      type: object
+      required: [id, text, type, options]
+      properties:
+        id: { type: integer, example: 1 }
+        text: { type: string }
+        type: { $ref: '#/components/schemas/SectionType' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/Option' }
+
+    Option:
+      type: object
+      required: [description, gotoId]
+      properties:
+        description: { type: string }
+        gotoId: { type: integer }
+        consequence: { $ref: '#/components/schemas/Consequence' }
+
+    Consequence:
+      type: object
+      required: [type, value]
+      properties:
+        type: { $ref: '#/components/schemas/ConsequenceType' }
+        value: { type: integer, minimum: 1, example: 4 }
+        text: { type: string, example: You scrape your shoulder squeezing through the narrow gap. }
+
+    BookImport:
+      type: object
+      description: |
+        Same format as the source JSON files. Section `id`, `gotoId` and
+        consequence `value` are integers, but numeric strings (e.g. `"500"`)
+        are also accepted and converted. Unknown fields are ignored.
+      required: [title, author, difficulty, sections]
+      properties:
+        id:
+          type: string
+          description: Optional slug. If missing, it's generated from the title.
+        title: { type: string, minLength: 1 }
+        author: { type: string, minLength: 1 }
+        difficulty: { $ref: '#/components/schemas/Difficulty' }
+        sections:
+          type: array
+          items: { $ref: '#/components/schemas/ImportSection' }
+
+    ImportSection:
+      type: object
+      description: Like `Section`, but `options` can be left out (e.g. on END sections).
+      required: [id, text, type]
+      properties:
+        id: { type: integer }
+        text: { type: string }
+        type: { $ref: '#/components/schemas/SectionType' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/Option' }
+
+    ValidationReport:
+      type: object
+      required: [valid, errors]
+      properties:
+        valid: { type: boolean }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/ValidationError' }
+      example:
+        valid: false
+        errors:
+          - code: NODE_WITHOUT_OPTIONS
+            sectionId: 666
+            message: Section 666 is not an END section but has no options.
+          - code: INVALID_GOTO
+            sectionId: 1
+            optionIndex: 1
+            gotoId: 999
+            message: Option 1 of section 1 points to section 999, which doesn't exist.
+
+    ValidationError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { $ref: '#/components/schemas/ValidationErrorCode' }
+        message: { type: string }
+        sectionId: { type: integer, nullable: true }
+        optionIndex: { type: integer, nullable: true }
+        gotoId: { type: integer, nullable: true }
+
+    BookSummaryPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: array
+              items: { $ref: '#/components/schemas/BookSummary' }
+
+    # ---------- Games ----------
+    StartGameRequest:
+      type: object
+      required: [bookId]
+      properties:
+        bookId: { type: string, example: crystal-caverns }
+
+    ChoiceRequest:
+      type: object
+      required: [optionId]
+      properties:
+        optionId:
+          type: integer
+          minimum: 0
+          description: The `id` of an option in the current section (from `GameState.currentSection.options`).
+
+    GameState:
+      type: object
+      description: Everything the UI needs to draw the header and the main content area.
+      required: [id, book, health, maxHealth, status, currentSection, startedAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        book:
+          type: object
+          required: [id, title]
+          properties:
+            id: { type: string, example: crystal-caverns }
+            title: { type: string, example: The Crystal Caverns }
+        health: { type: integer, minimum: 0, example: 6 }
+        maxHealth: { type: integer, example: 10 }
+        status: { $ref: '#/components/schemas/GameStatus' }
+        currentSection: { $ref: '#/components/schemas/PlayableSection' }
+        lastConsequence:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/AppliedConsequence'
+          nullable: true
+          description: The consequence applied by the last choice, if there was one.
+        stepCount: { type: integer, example: 2 }
+        startedAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        savedAt: { type: string, format: date-time, nullable: true }
+        finishedAt: { type: string, format: date-time, nullable: true }
+
+    PlayableSection:
+      type: object
+      description: The current section. Options are empty when the game has ended.
+      required: [id, text, type, options]
+      properties:
+        id: { type: integer, example: 20 }
+        text: { type: string }
+        type: { $ref: '#/components/schemas/SectionType' }
+        options:
+          type: array
+          items: { $ref: '#/components/schemas/PlayableOption' }
+
+    PlayableOption:
+      type: object
+      description: |
+        The `gotoId` and consequence are hidden so choices don't spoil the
+        story. The `id` is the option's position in the section, starting at 0.
+      required: [id, description]
+      properties:
+        id: { type: integer, example: 0 }
+        description: { type: string, example: Enter the crevice }
+
+    AppliedConsequence:
+      type: object
+      required: [type, value, healthBefore, healthAfter]
+      properties:
+        type: { $ref: '#/components/schemas/ConsequenceType' }
+        value: { type: integer, example: 4 }
+        text: { type: string }
+        healthBefore: { type: integer, example: 10 }
+        healthAfter: { type: integer, example: 6 }
+
+    HistoryEntry:
+      type: object
+      required: [step, fromSectionId, optionId, optionDescription, toSectionId, healthAfter, at]
+      properties:
+        step: { type: integer, example: 1 }
+        fromSectionId: { type: integer }
+        optionId: { type: integer }
+        optionDescription: { type: string }
+        toSectionId: { type: integer }
+        consequence:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/AppliedConsequence'
+          nullable: true
+        healthAfter: { type: integer }
+        at: { type: string, format: date-time }
+
+    GameSummary:
+      type: object
+      required: [id, bookId, bookTitle, health, status, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        bookId: { type: string }
+        bookTitle: { type: string }
+        health: { type: integer }
+        status: { $ref: '#/components/schemas/GameStatus' }
+        currentSectionId: { type: integer }
+        updatedAt: { type: string, format: date-time }
+        savedAt: { type: string, format: date-time, nullable: true }
+
+    GameSummaryPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: array
+              items: { $ref: '#/components/schemas/GameSummary' }
+
+    # ---------- Shared ----------
+    PageMeta:
+      type: object
+      required: [page, size, totalElements, totalPages]
+      properties:
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer }
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details (Spring's `ProblemDetail`).
+      required: [title, status]
+      properties:
+        type: { type: string, format: uri, default: about:blank }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+
+    InvalidBookProblem:
+      allOf:
+        - $ref: '#/components/schemas/Problem'
+        - type: object
+          properties:
+            errors:
+              type: array
+              items: { $ref: '#/components/schemas/ValidationError' }
